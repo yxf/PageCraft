@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Capture fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 800px;
+        background: #e64145;
+      }
+      section:nth-of-type(2) {
+        background: #27ae60;
+      }
+      section:nth-of-type(3) {
+        background: #276bd6;
+      }
+      header {
+        position: fixed;
+        top: 0;
+        background: white;
+        padding: 10px;
+      }
+      h1 {
+        margin: 0;
+        padding: 60px 20px;
+      }
+      input {
+        margin: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>Fixed header</header>
+    <main>
+      <section>
+        <h1>Capture test</h1>
+        <input value="PRIVATE_INPUT" />
+        <p contenteditable>PRIVATE_EDITABLE</p>
+      </section>
+      <section>Middle section</section>
+      <section>Bottom section</section>
+    </main>
+  </body>
+</html>

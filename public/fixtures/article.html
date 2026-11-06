@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><title>PageCraft 测试 · 阅读与表格</title
+  ><style>
+    body {
+      font: 16px/1.8 system-ui;
+      max-width: 1000px;
+      margin: 40px auto;
+      padding: 24px;
+      color: #293b34;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr 220px;
+      gap: 36px;
+    }
+    aside {
+      background: #edf2ee;
+      padding: 20px;
+    }
+    pre {
+      background: #f1f3f4;
+      padding: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    td,
+    th {
+      border: 1px solid #ccc;
+      padding: 10px;
+    }
+    button {
+      padding: 8px 14px;
+    }
+    img {
+      width: 52px;
+    }
+  </style>
+  <body>
+    <img src="/icon.svg" alt="PageCraft" />
+    <h1>浏览器里的小改造</h1>
+    <main>
+      <article>
+        <p>这是 PageCraft 的本地验收页面，包含文章、代码块、数据表格与异步内容。</p>
+        <pre><code>console.log('Hello, PageCraft');</code></pre>
+        <h2>项目列表</h2>
+        <table id="projects">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>PageCraft</td>
+              <td>开发中</td>
+            </tr>
+            <tr>
+              <td>阅读助手</td>
+              <td>已完成</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><button id="add">加载更多</button> <button id="route">切换 SPA 路径</button></p>
+        <label>隐私测试 <input value="DO_NOT_SEND_123" /></label
+        ><textarea hidden>HIDDEN_SECRET</textarea>
+      </article>
+      <aside class="recommendations">
+        <h2>相关推荐</h2>
+        <p>隐藏这个侧栏，扩大正文区域。</p>
+      </aside>
+    </main>
+    <script src="/fixtures/article.js"></script>
+  </body>
+</html>

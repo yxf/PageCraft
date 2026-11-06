@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "PageCraft · 页匠",
+  "version": "0.1.0",
+  "description": "用自然语言创建网页改造，保存并在下次访问时自动应用。",
+  "minimum_chrome_version": "138",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "userScripts",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.deepseek.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.anthropic.com/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*", "<all_urls>"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_title": "打开 PageCraft" },
+  "side_panel": { "default_path": "index.html" },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src https://api.openai.com https://api.deepseek.com https://generativelanguage.googleapis.com https://api.anthropic.com"
+  }
+}
