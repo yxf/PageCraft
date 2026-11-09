@@ -1,0 +1,5 @@
+{
+  "extensionName": { "message": "PageCraft · 页匠" },
+  "extensionDescription": { "message": "用自然语言创建网页改造，保存并在下次访问时自动应用。" },
+  "actionTitle": { "message": "打开 PageCraft" }
+}

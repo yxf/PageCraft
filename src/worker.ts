@@ -1,4 +1,5 @@
 import { readState, transact, storageReady } from './store';
+import { restoreSurfaceMode, setSurfaceMode } from './surface';
 import {
   activeVersion,
   emptyState,
@@ -154,7 +155,7 @@ async function saveVersion(
       updatedAt: now,
     });
     c.versions = [v, ...c.versions].slice(0, 10);
-    return c.id;
+    return { craftId: c.id, versionId: v.id, name: c.name, description: c.description };
   });
 }
 async function generate(m: any) {
@@ -166,6 +167,20 @@ async function generate(m: any) {
   if (!s.settings.consent)
     throw new Error(`请先在设置中同意发送页面摘要到 ${providers[s.settings.provider]}`);
   const old = m.craftId ? s.crafts.find((c) => c.id === m.craftId) : undefined;
+  if (m.craftId && (!old || old.deletedUntil)) throw new Error('此改造已删除');
+  if (
+    old &&
+    ((m.expectedVersion && old.activeVersionId !== m.expectedVersion) ||
+      (m.expectedUpdatedAt !== undefined && old.updatedAt !== m.expectedUpdatedAt))
+  )
+    throw new Error('此改造已在别处更新，请重新生成');
+  const history = m.history ?? [];
+  if (
+    !Array.isArray(history) ||
+    history.length > 6 ||
+    history.some((x) => typeof x !== 'string' || x.length > 1500)
+  )
+    throw new Error('对话上下文无效');
   const key = String(m.tabId);
   if ([...jobs.keys()].some((id) => id === m.id)) throw new Error('任务已存在');
   const previousTask = s.tasks[key];
@@ -197,7 +212,9 @@ async function generate(m: any) {
     let lastProgress = 0;
     const data = await requestAI(
       s.settings,
-      m.prompt,
+      history.length
+        ? JSON.stringify({ previousRequests: history, currentRequest: m.prompt })
+        : m.prompt,
       context,
       old ? activeVersion(old) : undefined,
       controller.signal,
@@ -222,8 +239,8 @@ async function generate(m: any) {
       s.tasks[key].stage = '校验并保存';
     });
     if (controller.signal.aborted) throw new Error(abortMessage(controller.signal));
-    const craftId = await saveVersion(
-      data,
+    const saved = await saveVersion(
+      { ...data, name: old?.name ?? data.name },
       m.prompt,
       m.matches,
       m.excludeMatches,
@@ -232,6 +249,7 @@ async function generate(m: any) {
       controller.signal,
       old?.updatedAt,
     );
+    const { craftId } = saved;
     let stage: string;
     try {
       stage = await reconcile();
@@ -241,7 +259,7 @@ async function generate(m: any) {
     await transact((s) => {
       if (s.tasks[key]?.id === m.id) s.tasks[key] = { ...s.tasks[key], stage, craftId };
     });
-    return { craftId, notice: stage };
+    return { ...saved, notice: stage };
   } catch (e) {
     await transact((s) => {
       if (s.tasks[key]?.id === m.id)
@@ -282,6 +300,8 @@ async function handle(m: any) {
     return result;
   }
   switch (m.type) {
+    case 'SURFACE_MODE':
+      return setSurfaceMode(m.mode);
     case 'TOOL_STATE':
       return getToolStatus();
     case 'TOOL_CANCEL':
@@ -348,7 +368,7 @@ async function handle(m: any) {
       jobs.get(m.id)?.abort();
       return true;
     case 'SAVE': {
-      const id = await saveVersion(
+      const saved = await saveVersion(
         m.data,
         '手工编辑',
         m.matches,
@@ -358,7 +378,7 @@ async function handle(m: any) {
         undefined,
         m.expectedUpdatedAt,
       );
-      return { craftId: id, notice: await reconcile() };
+      return { ...saved, notice: await reconcile() };
     }
     case 'TOGGLE': {
       const s = await readState();
@@ -368,6 +388,27 @@ async function handle(m: any) {
       await transact((s) => {
         const c = s.crafts.find((c) => c.id === m.id)!;
         c.enabled = !!m.enabled;
+        c.updatedAt = Date.now();
+      });
+      return reconcile();
+    }
+    case 'CONVERSATION_UNDO': {
+      const state = await readState(),
+        craft = state.crafts.find((c) => c.id === m.craftId && !c.deletedUntil);
+      if (!craft) throw new Error('此改造已删除');
+      await requireAccess(craft.matches);
+      await transact((s) => {
+        const c = s.crafts.find((c) => c.id === m.craftId && !c.deletedUntil);
+        if (!c || !m.versionId || c.activeVersionId !== m.versionId)
+          throw new Error('已有后续修改，请在版本记录中选择回退');
+        if (m.priorVersionId) {
+          const v = c.versions.find((v) => v.id === m.priorVersionId);
+          if (!v) throw new Error('旧版本已不存在');
+          checkScript(v.script, v.css);
+          c.activeVersionId = v.id;
+        } else {
+          c.enabled = false;
+        }
         c.updatedAt = Date.now();
       });
       return reconcile();
@@ -427,7 +468,7 @@ const ready = (async () => {
     }
     s.crafts = s.crafts.filter((c) => !c.deletedUntil || c.deletedUntil > Date.now());
   });
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await restoreSurfaceMode();
 })().catch(() => {});
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (

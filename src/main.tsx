@@ -1,45 +1,53 @@
+import {
+  t,
+  getLocale,
+  getPreference,
+  subscribeLanguage,
+  initializeLanguage,
+  setLanguage,
+  type LanguagePreference,
+} from './i18n';
 import React, { useCallback, useEffect, useState } from 'react';
+import { CurrentPage } from './CurrentPage';
 import { createRoot } from 'react-dom/client';
 import {
-  ArrowUp,
   ArrowLeft,
   Check,
-  ChevronRight,
   Code2,
-  FileText,
   Globe,
   Layers,
-  LoaderCircle,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
   Settings2,
-  Square,
   Trash2,
   Unplug,
   X,
-  MousePointer2,
   ExternalLink,
+  PanelRightOpen,
+  PanelsTopLeft,
   KeyRound,
-  ShieldCheck,
   Wrench,
 } from 'lucide-react';
-import { activeVersion, type Craft, type Context, type State } from './types';
-import { lines, matchesRules, originsFor, pagePattern, supported, validateRules } from './rules';
+import { activeVersion, type Craft, type State } from './types';
+import { lines, matchesRules, originsFor, supported, validateRules } from './rules';
 import { isExtension, send } from './client';
 import { providers, publicSettings } from './providers';
 import type { Provider } from './types';
 import './style.css';
 import { ToolsView } from './tools/ToolsView';
+const isPopup = new URLSearchParams(location.search).get('surface') === 'popup';
+const isSidePanel = !location.pathname.includes('options') && !isPopup;
+document.documentElement.classList.toggle('popup-surface', isPopup);
 type Snapshot = Omit<State, 'settings'> & {
   available: boolean;
   grants: Record<string, boolean>;
   settings: ReturnType<typeof publicSettings>;
 };
 const time = (n: number) =>
-  new Date(n).toLocaleString('zh-CN', {
+  new Date(n).toLocaleString(getLocale(), {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -70,17 +78,16 @@ function IconButton({
   );
 }
 function App() {
+  React.useSyncExternalStore(subscribeLanguage, () => `${getPreference()}:${getLocale()}`);
   const [state, setState] = useState<Snapshot>(),
     [view, setView] = useState<'create' | 'library' | 'settings' | 'tools'>(
       location.pathname.includes('options') ? 'library' : 'create',
     );
-  const [tab, setTab] = useState<{ id?: number; url?: string; title?: string }>({}),
-    [prompt, setPrompt] = useState(''),
-    [patterns, setPatterns] = useState(''),
-    [excludes, setExcludes] = useState('');
-  const [context, setContext] = useState<Context>(),
-    [contextOpen, setContextOpen] = useState(false),
-    [busy, setBusy] = useState(false),
+  const [tab, setTab] = useState<{ id?: number; windowId?: number; url?: string; title?: string }>(
+    {},
+  );
+  const [openingPanel, setOpeningPanel] = useState(false);
+  const [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(''),
     [error, setError] = useState('');
   const [selected, setSelected] = useState<string>(),
@@ -140,27 +147,6 @@ function App() {
       chrome.tabs.onUpdated.removeListener(update);
     };
   }, []);
-  useEffect(() => {
-    setContext(undefined);
-    setContextOpen(false);
-    if (tab.url && supported(tab.url)) setPatterns(pagePattern(tab.url));
-    else setPatterns('');
-    setExcludes('');
-    setSelected(undefined);
-    if (tab.id && isExtension) {
-      let alive = true;
-      chrome.storage.session.get(`draft:${tab.id}`).then((v) => {
-        if (alive) setPrompt(v[`draft:${tab.id}`] || '');
-      });
-      return () => {
-        alive = false;
-      };
-    }
-  }, [tab.id, tab.url]);
-  const draft = (value: string) => {
-    setPrompt(value);
-    if (isExtension && tab.id) void chrome.storage.session.set({ [`draft:${tab.id}`]: value });
-  };
   const run = async (fn: () => Promise<any>) => {
     setError('');
     setNotice('');
@@ -178,51 +164,13 @@ function App() {
   };
   const grant = async (matches: string[]) => {
     validateRules(matches, []);
-    if (!isExtension) throw new Error('请先加载 Chrome 扩展');
+    if (!isExtension) throw new Error(t('请先加载 Chrome 扩展'));
     const granted = await chrome.permissions.request({ origins: originsFor(matches) });
-    if (!granted) throw new Error('未授予网站权限');
+    if (!granted) throw new Error(t('未授予网站权限'));
   };
   const live = state?.crafts.filter((c) => !c.deletedUntil) || [];
-  const current = live.filter((c) => tab.url && matchesRules(c.matches, c.excludeMatches, tab.url));
-  const task = state?.tasks[String(tab.id)];
-  const generating = task && ['采集页面', 'AI 正在生成', '校验并保存'].includes(task.stage);
-  const create = () =>
-    void run(async () => {
-      const matches = lines(patterns),
-        excludeMatches = lines(excludes);
-      validateRules(matches, excludeMatches);
-      await grant(matches);
-      if (!tab.id || !tab.url || !supported(tab.url)) throw new Error('请切换到普通网页');
-      if (!state?.settings.hasKey || !state.settings.model)
-        throw new Error('请先在设置中填写 API Key 和模型 ID');
-      if (!state.settings.consent) throw new Error('请先在设置中确认页面摘要发送说明');
-      const id = crypto.randomUUID();
-      const result = await send('GENERATE', {
-        id,
-        tabId: tab.id,
-        prompt,
-        matches,
-        excludeMatches,
-        context,
-        craftId: selected,
-      });
-      setSelected(result.craftId);
-      return result.notice;
-    });
-  const capture = (select = false) =>
-    void run(async () => {
-      if (!tab.id || !tab.url || !supported(tab.url)) throw new Error('请切换到普通网页');
-      await grant([pagePattern(tab.url)]);
-      const data = await send('CONTEXT', { tabId: tab.id, select });
-      setContext(data);
-      setContextOpen(true);
-      return select ? '已选择页面区域' : '页面摘要已更新';
-    });
   const revise = (c: Craft) => {
     setSelected(c.id);
-    setPatterns(c.matches.join('\n'));
-    setExcludes(c.excludeMatches.join('\n'));
-    draft('');
     setView('create');
   };
   const toggle = (c: Craft) =>
@@ -255,22 +203,22 @@ function App() {
           <span>{c.description || c.matches[0]}</span>
           <small className={record?.status === 'error' ? 'danger' : ''}>
             {!state?.grants[c.id]
-              ? '缺少站点权限'
+              ? t('缺少站点权限')
               : !c.enabled
-                ? '已停用'
+                ? t('已停用')
                 : record?.status === 'ok'
-                  ? '执行无异常 · 待验证'
+                  ? t('执行无异常 · 待验证')
                   : record?.status === 'error'
-                    ? '运行失败 · 可修改或重新生成'
+                    ? t('运行失败 · 可修改或重新生成')
                     : record?.status === 'refresh'
-                      ? '请刷新恢复页面'
-                      : '等待匹配页面'}{' '}
+                      ? t('请刷新恢复页面')
+                      : t('等待匹配页面')}{' '}
             · {time(c.updatedAt)}
           </small>
         </button>
         <button
           role="switch"
-          aria-label={`${c.name} 启用状态`}
+          aria-label={t('{0} 启用状态', c.name)}
           aria-checked={c.enabled}
           className={'toggle ' + (c.enabled ? 'on' : '')}
           onClick={() => toggle(c)}
@@ -282,25 +230,83 @@ function App() {
     );
   }
   return (
-    <div className={'app ' + (location.pathname.includes('options') ? 'wide' : '')}>
+    <div
+      className={
+        'app ' +
+        (location.pathname.includes('options') ? 'wide ' : '') +
+        (view === 'create' && !editing ? 'current-view' : '')
+      }
+    >
       <header className="topbar">
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setView('create');
-          }}
-          className="brand"
-        >
-          <img src="/icon.svg" alt="" />
-          <span>
-            PageCraft<small>页匠</small>
-          </span>
-        </a>
+        <div className="brand-actions">
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              setView('create');
+            }}
+            className="brand"
+          >
+            <img src="/icons/icon-128.png" alt="" />
+            <span>
+              PageCraft<small>{t('页匠')}</small>
+            </span>
+          </a>
+        </div>
         <div className="header-actions">
           <span className="version">LOCAL · 0.1</span>
+          {isSidePanel && (
+            <IconButton
+              title={t('切换到弹出框')}
+              disabled={!isExtension || tab.windowId === undefined || openingPanel}
+              onClick={() => {
+                setOpeningPanel(true);
+                void send('SURFACE_MODE', { mode: 'popup' })
+                  .then(() => chrome.action.openPopup({ windowId: tab.windowId! }))
+                  .then(async () => {
+                    const sidePanel = chrome.sidePanel as typeof chrome.sidePanel & {
+                      close?: (options: { windowId: number }) => Promise<void>;
+                    };
+                    if (sidePanel.close) await sidePanel.close({ windowId: tab.windowId! });
+                    else window.close();
+                  })
+                  .catch((e) => {
+                    setError(
+                      t(
+                        '已尝试切换到弹出框，请点击工具栏图标重试；若侧边栏仍显示，可手动关闭。{0}',
+                        e.message,
+                      ),
+                    );
+                  })
+                  .finally(() => setOpeningPanel(false));
+              }}
+            >
+              <PanelsTopLeft size={17} />
+            </IconButton>
+          )}
+          {isPopup && (
+            <IconButton
+              title={t('在侧边栏打开')}
+              disabled={!isExtension || tab.windowId === undefined || openingPanel}
+              onClick={() => {
+                setOpeningPanel(true);
+                // Queue persistence before opening can dismiss the popup; don't await before open.
+                const remember = send('SURFACE_MODE', { mode: 'sidepanel' });
+                void Promise.all([remember, chrome.sidePanel.open({ windowId: tab.windowId! })])
+                  .then(() => window.close())
+                  .catch(async (e) => {
+                    await remember.catch(() => {});
+                    await send('SURFACE_MODE', { mode: 'popup' }).catch(() => {});
+                    setError(t('无法打开侧边栏：{0}', e.message));
+                    setOpeningPanel(false);
+                  });
+              }}
+            >
+              <PanelRightOpen size={17} />
+            </IconButton>
+          )}
           <IconButton
-            title="打开管理页"
+            title={t('打开管理页')}
             onClick={() =>
               isExtension ? void chrome.runtime.openOptionsPage() : setView('library')
             }
@@ -309,13 +315,13 @@ function App() {
           </IconButton>
         </div>
       </header>
-      <nav className="tabs" aria-label="主要导航">
+      <nav className="tabs" aria-label={t('主要导航')}>
         {(
           [
-            ['create', '当前页面', Globe],
-            ['library', '我的改造', Layers],
-            ['tools', '工具', Wrench],
-            ['settings', '设置', Settings2],
+            ['create', t('当前页面'), Globe],
+            ['library', t('我的改造'), Layers],
+            ['tools', t('工具'), Wrench],
+            ['settings', t('设置'), Settings2],
           ] as const
         ).map(([id, label, Icon]) => (
           <button
@@ -339,28 +345,28 @@ function App() {
         {!isExtension && (
           <div className="preview-note">
             <Unplug size={15} />
-            界面预览 · 尚未连接浏览器扩展
+            {t('界面预览 · 尚未连接浏览器扩展')}
           </div>
         )}
         {error && (
           <div className="message error" role="alert">
-            <span>{error}</span>
-            <IconButton title="关闭错误" onClick={() => setError('')}>
+            <span>{t(error)}</span>
+            <IconButton title={t('关闭错误')} onClick={() => setError('')}>
               <X size={15} />
             </IconButton>
           </div>
         )}
         {notice && (
           <div className="message success" role="status">
-            <span>{notice}</span>
-            <IconButton title="关闭通知" onClick={() => setNotice('')}>
+            <span>{t(notice)}</span>
+            <IconButton title={t('关闭通知')} onClick={() => setNotice('')}>
               <X size={15} />
             </IconButton>
           </div>
         )}
         {undo && (
           <div className="message">
-            <span>改造已删除</span>
+            <span>{t('改造已删除')}</span>
             <button
               onClick={() =>
                 void run(async () => {
@@ -370,230 +376,30 @@ function App() {
                 })
               }
             >
-              撤销
+              {t('撤销')}
             </button>
           </div>
         )}
-        {view === 'create' && !editing && (
-          <>
-            <section className="page-heading">
-              <div>
-                <div className="eyebrow">当前页面</div>
-                <h1>
-                  {tab.url && supported(tab.url) ? new URL(tab.url).hostname : '等待打开网页'}
-                </h1>
-                <p className="page-title">{tab.title || 'PageCraft'}</p>
-              </div>
-              <span
-                className={'connection ' + (tab.url && supported(tab.url) ? 'connected' : '')}
-              />
-            </section>
-            {state && !state.available && isExtension && (
-              <div className="setup-note">
-                <ShieldCheck size={18} />
-                <div>
-                  尚未允许用户脚本
-                  <button
-                    onClick={() =>
-                      void chrome.tabs.create({
-                        url: `chrome://extensions/?id=${chrome.runtime.id}`,
-                      })
-                    }
-                  >
-                    打开扩展详情
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
-            <section className="composer-section">
-              <div className="section-title">
-                <h2>{selected ? '继续修改' : '创建改造'}</h2>
-                {selected && (
-                  <IconButton
-                    title="新建改造"
-                    onClick={() => {
-                      setSelected(undefined);
-                      draft('');
-                    }}
-                  >
-                    <Plus size={17} />
-                  </IconButton>
-                )}
-              </div>
-              {selected && (
-                <div className="selected-name">
-                  <Code2 size={14} />
-                  {live.find((c) => c.id === selected)?.name}
-                </div>
-              )}
-              <div className="composer">
-                <textarea
-                  aria-label="改造需求"
-                  placeholder="你想让这个网页有什么不同？"
-                  value={prompt}
-                  maxLength={6000}
-                  onChange={(e) => draft(e.target.value)}
-                  disabled={!!generating}
-                />
-                <div className="composer-bottom">
-                  <span>{prompt.length} / 6000</span>
-                  {generating ? (
-                    <IconButton
-                      title="取消生成"
-                      onClick={() =>
-                        void send('CANCEL', { id: task.id }).catch((e) => setError(e.message))
-                      }
-                    >
-                      <Square size={17} />
-                    </IconButton>
-                  ) : (
-                    <button
-                      className="primary generate"
-                      onClick={create}
-                      disabled={busy || !prompt.trim()}
-                    >
-                      <ArrowUp size={17} />
-                      生成并应用
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="context-actions">
-                <button className="quiet" onClick={() => capture(true)} disabled={busy}>
-                  <MousePointer2 size={15} />
-                  选择元素
-                </button>
-                <button
-                  className="quiet"
-                  onClick={() => (context ? setContextOpen(!contextOpen) : capture())}
-                  disabled={busy}
-                >
-                  <FileText size={15} />
-                  {context ? '查看摘要' : '采集摘要'}
-                </button>
-                {context && (
-                  <IconButton title="重新采集摘要" onClick={() => capture()} disabled={busy}>
-                    <RefreshCw size={14} />
-                  </IconButton>
-                )}
-              </div>
-              {contextOpen && context && (
-                <div className="context-preview">
-                  <div>
-                    {context.summary.length} 字符{context.truncated ? ' · 已裁剪' : ''}
-                  </div>
-                  <pre>{context.summary}</pre>
-                </div>
-              )}
-              <details className="rules" open>
-                <summary>
-                  应用范围 <span>{lines(patterns).length} 条规则</span>
-                </summary>
-                <div className="rule-presets">
-                  <button
-                    disabled={!tab.url || !supported(tab.url)}
-                    onClick={() => setPatterns(pagePattern(tab.url!))}
-                  >
-                    当前网站
-                  </button>
-                  <button
-                    disabled={!tab.url || !supported(tab.url)}
-                    onClick={() => setPatterns(pagePattern(tab.url!, true))}
-                  >
-                    当前路径
-                  </button>
-                </div>
-                <label>
-                  匹配规则
-                  <textarea
-                    className="code compact"
-                    aria-label="匹配规则"
-                    value={patterns}
-                    onChange={(e) => setPatterns(e.target.value)}
-                    placeholder="https://example.com/*"
-                  />
-                </label>
-                <label>
-                  排除规则
-                  <textarea
-                    className="code compact"
-                    aria-label="排除规则"
-                    value={excludes}
-                    onChange={(e) => setExcludes(e.target.value)}
-                    placeholder="https://example.com/private/*"
-                  />
-                </label>
-                <p className="rule-result">
-                  {tab.url
-                    ? matchesRules(lines(patterns), lines(excludes), tab.url)
-                      ? '当前页面在应用范围内'
-                      : '当前页面不在应用范围内'
-                    : '尚未选择页面'}
-                </p>
-              </details>
-            </section>
-            {(busy || task) && (
-              <div className={'task-status ' + (task?.error ? 'danger' : '')}>
-                {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
-                <span>
-                  {task?.error || task?.stage || '正在处理'}
-                  {generating && task?.stage === 'AI 正在生成' && (
-                    <span>
-                      {' '}
-                      ·{' '}
-                      {task.receivedChars
-                        ? `已接收 ${task.receivedChars} 字符`
-                        : task.lastResponseAt
-                          ? '模型已响应，等待代码'
-                          : '等待模型响应'}
-                    </span>
-                  )}
-                  {task?.error && (
-                    <button
-                      className="text-link"
-                      onClick={create}
-                      disabled={busy || !prompt.trim()}
-                    >
-                      重试
-                    </button>
-                  )}
-                </span>
-              </div>
-            )}
-            <section className="current-crafts">
-              <div className="section-title">
-                <h2>
-                  此页的改造 <span className="count">{current.length}</span>
-                </h2>
-                <IconButton
-                  title="重新应用已保存改造"
-                  onClick={() => void run(() => send('REAPPLY'))}
-                  disabled={busy}
-                >
-                  <RefreshCw size={16} />
-                </IconButton>
-              </div>
-              {current.length ? (
-                current.map(craftRow)
-              ) : (
-                <div className="empty">
-                  <Layers size={28} />
-                  <h3>还没有改造</h3>
-                  <p>此页面的改造会保存在这里</p>
-                </div>
-              )}
-            </section>
-          </>
+        {view === 'create' && !editing && state && (
+          <CurrentPage
+            key={`${tab.id}:${tab.url && supported(tab.url) ? new URL(tab.url).origin : 'no-page'}`}
+            state={state}
+            tab={tab}
+            initialTarget={selected}
+            onTargetConsumed={() => setSelected(undefined)}
+            onEdit={setEditing}
+            refresh={refresh}
+          />
         )}
         {view === 'library' && !editing && (
           <>
             <section className="page-heading">
               <div>
-                <div className="eyebrow">工作空间</div>
-                <h1>我的改造</h1>
+                <div className="eyebrow">{t('工作空间')}</div>
+                <h1>{t('我的改造')}</h1>
                 <p>
-                  {live.filter((c) => c.enabled).length} 个启用 · {live.length} 个已保存
+                  {live.filter((c) => c.enabled).length} {t('个启用 ·')}
+                  {live.length} {t('个已保存')}
                 </p>
               </div>
               <button
@@ -604,21 +410,25 @@ function App() {
                 }}
               >
                 <Plus size={16} />
-                新建
+                {t('新建')}
               </button>
             </section>
             <div className="filters">
               <label className="search">
                 <Search size={16} />
                 <input
-                  aria-label="搜索改造"
-                  placeholder="搜索改造"
+                  aria-label={t('搜索改造')}
+                  placeholder={t('搜索改造')}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </label>
-              <select aria-label="站点筛选" value={site} onChange={(e) => setSite(e.target.value)}>
-                <option value="all">全部站点</option>
+              <select
+                aria-label={t('站点筛选')}
+                value={site}
+                onChange={(e) => setSite(e.target.value)}
+              >
+                <option value="all">{t('全部站点')}</option>
                 {[...new Set(live.flatMap((c) => c.matches))].map((p) => (
                   <option key={p}>{p}</option>
                 ))}
@@ -634,11 +444,11 @@ function App() {
             {!live.length && (
               <div className="empty large">
                 <Layers size={36} />
-                <h3>你的网页，你的版本</h3>
-                <p>尚未保存任何改造</p>
+                <h3>{t('你的网页，你的版本')}</h3>
+                <p>{t('尚未保存任何改造')}</p>
                 <button className="primary" onClick={() => setView('create')}>
                   <Plus size={16} />
-                  创建改造
+                  {t('创建改造')}
                 </button>
               </div>
             )}
@@ -683,17 +493,39 @@ function App() {
           <>
             <section className="page-heading">
               <div>
-                <div className="eyebrow">偏好设置</div>
-                <h1>连接你的 AI</h1>
-                <p>{providers[provider]} · 用户自带 API Key</p>
+                <div className="eyebrow">{t('偏好设置')}</div>
+                <h1>{t('设置')}</h1>
               </div>
-              <KeyRound size={25} />
+              <Settings2 size={25} />
             </section>
-            <section className="settings-form">
+            <section className="settings-form" aria-labelledby="general-settings-title">
+              <h2 id="general-settings-title">{t('通用设置')}</h2>
               <label>
-                AI 服务商
+                {t('界面语言')}
                 <select
-                  aria-label="AI 服务商"
+                  aria-label={t('界面语言')}
+                  value={getPreference()}
+                  onChange={(e) =>
+                    void setLanguage(e.target.value as LanguagePreference).catch(() =>
+                      setError(t('语言设置保存失败')),
+                    )
+                  }
+                >
+                  <option value="auto">{t('跟随浏览器')}</option>
+                  <option value="zh-CN">简体中文</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+            </section>
+            <section className="settings-section settings-form" aria-labelledby="ai-settings-title">
+              <h2 id="ai-settings-title">{t('AI 配置')}</h2>
+              <p className="settings-note">
+                {providers[provider]} {t('· 用户自带 API Key')}
+              </p>
+              <label>
+                {t('AI 服务商')}
+                <select
+                  aria-label={t('AI 服务商')}
                   value={provider}
                   disabled={busy}
                   onChange={(e) => {
@@ -715,7 +547,7 @@ function App() {
               <label>
                 API Key
                 <span className="field-status">
-                  {state?.settings.profiles[provider].hasKey ? '已保存' : '未配置'}
+                  {state?.settings.profiles[provider].hasKey ? t('已保存') : t('未配置')}
                 </span>
                 <input
                   type="password"
@@ -724,19 +556,19 @@ function App() {
                   onChange={(e) => setKey(e.target.value)}
                   placeholder={
                     state?.settings.profiles[provider].hasKey
-                      ? '留空保留现有 Key'
-                      : '填写当前服务商的 API Key'
+                      ? t('留空保留现有 Key')
+                      : t('填写当前服务商的 API Key')
                   }
                   aria-label="API Key"
                 />
               </label>
               <label>
-                模型 ID
+                {t('模型 ID')}
                 <input
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="填写支持结构化输出的模型 ID"
-                  aria-label="模型 ID"
+                  placeholder={t('填写支持结构化输出的模型 ID')}
+                  aria-label={t('模型 ID')}
                 />
               </label>
               <label className="checkbox">
@@ -746,13 +578,15 @@ function App() {
                   onChange={(e) => setConsent(e.target.checked)}
                 />
                 <span>
-                  允许将我的需求及必要的页面摘要发送到 {providers[provider]}
-                  。可见文本可能包含个人信息。
+                  {t('允许将我的需求及必要的页面摘要发送到')}
+                  {providers[provider]}
+                  {t('。可见文本可能包含个人信息。')}
                 </span>
               </label>
               <p className="settings-note">
-                Key 仅保存在本机扩展存储，不会传入网页。API 调用由你的 {providers[provider]}
-                账户计费，本地保存不等同于加密保险库。
+                {t('Key 仅保存在本机扩展存储，不会传入网页。API 调用由你的')}
+                {providers[provider]}
+                {t('账户计费，本地保存不等同于加密保险库。')}
               </p>
               <div className="button-row">
                 <button
@@ -762,28 +596,30 @@ function App() {
                     void run(async () => {
                       await send('SETTINGS', { provider, apiKey: key, model, consent });
                       setKey('');
-                      return '设置已保存';
+                      return t('设置已保存');
                     })
                   }
                 >
                   <Save size={16} />
-                  保存设置
+                  {t('保存设置')}
                 </button>
                 <button
                   disabled={busy || !state?.settings.hasKey || provider !== state.settings.provider}
                   onClick={() => void run(() => send('TEST'))}
                 >
                   <RefreshCw size={16} />
-                  测试已保存连接
+                  {t('测试已保存连接')}
                 </button>
               </div>
-              <p className="muted">连接测试会产生少量 API 费用。</p>
+              <p className="muted">{t('连接测试会产生少量 API 费用。')}</p>
             </section>
             <section className="settings-section">
-              <h2>脚本执行</h2>
-              <p>{state?.available ? '用户脚本 API 已就绪' : '用户脚本尚未启用'}</p>
+              <h2>{t('脚本执行')}</h2>
+              <p>{state?.available ? t('用户脚本 API 已就绪') : t('用户脚本尚未启用')}</p>
               <p className="settings-note">
-                开发模式：仅校验代码语法，不限制脚本能力。生成代码可读取页面数据、联网或改变页面行为，请仅在测试网页使用。关闭改造可能无法撤销全部副作用。
+                {t(
+                  '开发模式：仅校验代码语法，不限制脚本能力。生成代码可读取页面数据、联网或改变页面行为，请仅在测试网页使用。关闭改造可能无法撤销全部副作用。',
+                )}
               </p>
               <button
                 onClick={() =>
@@ -792,11 +628,11 @@ function App() {
                 }
               >
                 <ExternalLink size={15} />
-                扩展权限
+                {t('扩展权限')}
               </button>
             </section>
             <section className="settings-section">
-              <h2>本地数据</h2>
+              <h2>{t('本地数据')}</h2>
               <div className="button-row">
                 <button
                   disabled={busy || !state?.settings.profiles[provider].hasKey}
@@ -804,34 +640,34 @@ function App() {
                     void run(async () => {
                       await send('SETTINGS', { provider, clearKey: true, model, consent });
                       setKey('');
-                      return 'API Key 已清除';
+                      return t('API Key 已清除');
                     })
                   }
                 >
                   <KeyRound size={15} />
-                  清除 Key
+                  {t('清除 Key')}
                 </button>
                 <button className="danger" onClick={() => setClearConfirm(true)}>
                   <Trash2 size={15} />
-                  清除全部数据
+                  {t('清除全部数据')}
                 </button>
               </div>
               {clearConfirm && (
                 <div className="message error">
-                  <span>将删除全部改造、版本和 Key，无法撤销。</span>
+                  <span>{t('将删除全部改造、版本和 Key，无法撤销。')}</span>
                   <button
                     onClick={() =>
                       void run(async () => {
                         await send('CLEAR');
                         setClearConfirm(false);
                         setSettingsLoaded(false);
-                        return '本地数据已清除；请刷新已打开的网页';
+                        return t('本地数据已清除；请刷新已打开的网页');
                       })
                     }
                   >
-                    确认清除
+                    {t('确认清除')}
                   </button>
-                  <button onClick={() => setClearConfirm(false)}>取消</button>
+                  <button onClick={() => setClearConfirm(false)}>{t('取消')}</button>
                 </div>
               )}
             </section>
@@ -841,9 +677,9 @@ function App() {
       <footer>
         <span>
           <i />
-          本地工作空间
+          {t('本地工作空间')}
         </span>
-        <span>PageCraft / 页匠</span>
+        <span>{t('PageCraft / 页匠')}</span>
       </footer>
     </div>
   );
@@ -878,19 +714,19 @@ function Editor({
       <div className="section-title">
         <button className="quiet" onClick={onClose}>
           <ArrowLeft size={16} />
-          返回
+          {t('返回')}
         </button>
-        <IconButton title="删除改造" onClick={onDelete} disabled={busy}>
+        <IconButton title={t('删除改造')} onClick={onDelete} disabled={busy}>
           <Trash2 size={16} />
         </IconButton>
       </div>
       <h1>{craft.name}</h1>
       <label>
-        名称
+        {t('名称')}
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
       </label>
       <label>
-        说明
+        {t('说明')}
         <textarea
           rows={4}
           value={description}
@@ -901,7 +737,7 @@ function Editor({
       <label>
         JavaScript
         <textarea
-          aria-label="JavaScript 源码"
+          aria-label={t('JavaScript 源码')}
           className="code source"
           spellCheck={false}
           value={script}
@@ -911,7 +747,7 @@ function Editor({
       <label>
         CSS
         <textarea
-          aria-label="CSS 源码"
+          aria-label={t('CSS 源码')}
           className="code"
           spellCheck={false}
           value={css}
@@ -919,7 +755,7 @@ function Editor({
         />
       </label>
       <label>
-        匹配规则
+        {t('匹配规则')}
         <textarea
           className="code compact"
           value={matches}
@@ -927,7 +763,7 @@ function Editor({
         />
       </label>
       <label>
-        排除规则
+        {t('排除规则')}
         <textarea
           className="code compact"
           value={exclude}
@@ -935,14 +771,14 @@ function Editor({
         />
       </label>
       <label>
-        测试 URL
+        {t('测试 URL')}
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://example.com/page"
         />
       </label>
-      {url && <p>{matchesRules(lines(matches), lines(exclude), url) ? '匹配' : '不匹配'}</p>}
+      {url && <p>{matchesRules(lines(matches), lines(exclude), url) ? t('匹配') : t('不匹配')}</p>}
       <div className="button-row">
         <button
           className="primary"
@@ -956,15 +792,16 @@ function Editor({
           }
         >
           <Save size={16} />
-          保存并应用
+          {t('保存并应用')}
         </button>
         <button onClick={onRevise} disabled={busy}>
-          <Code2 size={16} />用 AI 修改
+          <Code2 size={16} />
+          {t('用 AI 修改')}
         </button>
       </div>
       {v.steps.length > 0 && (
         <div className="verification">
-          <h2>验证步骤</h2>
+          <h2>{t('验证步骤')}</h2>
           <ol>
             {v.steps.map((s, i) => (
               <li key={i}>{s}</li>
@@ -973,7 +810,7 @@ function Editor({
         </div>
       )}
       <div className="history">
-        <h2>版本记录</h2>
+        <h2>{t('版本记录')}</h2>
         {craft.versions.map((version, i) => (
           <div className="history-row" key={version.id}>
             <div>
@@ -981,10 +818,10 @@ function Editor({
               <span>{version.prompt}</span>
             </div>
             {version.id === craft.activeVersionId ? (
-              <small>当前版本</small>
+              <small>{t('当前版本')}</small>
             ) : (
               <IconButton
-                title={`回退到版本 ${craft.versions.length - i}`}
+                title={t('回退到版本 {0}', craft.versions.length - i)}
                 onClick={() => onRollback(version.id)}
                 disabled={busy}
               >
@@ -997,4 +834,4 @@ function Editor({
     </section>
   );
 }
-createRoot(document.getElementById('root')!).render(<App />);
+void initializeLanguage().then(() => createRoot(document.getElementById('root')!).render(<App />));

@@ -5,6 +5,7 @@ import { REQUEST_TIMEOUT_MS, abortMessage } from '../stream';
 import { currentTool, normalizeResult, saveCustom, validateCustom } from './custom-model';
 import { customCode } from './custom-runtime';
 import { runTool, cancelTool, getToolStatus } from './runner';
+import { runRuntimeAI, cancelRuntimeAI } from './runtime-ai';
 
 export interface CustomStatus {
   id: string;
@@ -53,6 +54,25 @@ export async function customCall(message: any, sender: chrome.runtime.MessageSen
     sender.frameId !== 0
   )
     throw new Error('工具调用已过期或来源不匹配');
+  const owner = `manual:${active.id}:${sender.tab?.id}:${sender.documentId}`;
+  if (message.action === 'ai-cancel') {
+    cancelRuntimeAI(owner, message.options?.requestId);
+    return;
+  }
+  if (message.action === 'ai')
+    return runRuntimeAI(
+      owner,
+      message.options,
+      async () => {
+        if (job !== active || active.controller.signal.aborted) throw new Error('工具已结束');
+        const [doc] = await chrome.scripting.executeScript({
+          target: { tabId: active.tabId!, documentIds: [active.documentId!] },
+          func: () => location.href,
+        });
+        if (!doc?.result) throw new Error('页面已关闭');
+      },
+      active.controller.signal,
+    );
   if (!['screenshot', 'extract-text'].includes(message.action)) throw new Error('未知内置工具');
   const id = crypto.randomUUID();
   active.helpers.add(id);
@@ -157,7 +177,12 @@ export async function handleCustom(message: any) {
       );
       controller.signal.throwIfAborted();
       status.stage = '代码已生成，尚未保存';
-      return { ...data, params: message.params || {}, prompt: message.prompt };
+      return {
+        ...data,
+        name: previous?.name ?? data.name,
+        params: message.params || {},
+        prompt: message.prompt,
+      };
     }
     const saved = message.toolId
       ? state.customTools.find((t) => t.id === message.toolId)
@@ -218,6 +243,7 @@ export async function handleCustom(message: any) {
     status.error = error.message;
     throw error;
   } finally {
+    controller.abort();
     for (const child of active.helpers) cancelTool(child);
     clearTimeout(timer);
     clearInterval(keep);

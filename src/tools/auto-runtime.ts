@@ -6,6 +6,7 @@ import {
   type CustomTool,
 } from './custom-model';
 import { matchesRules, matchesPattern, parsePattern } from '../rules';
+import { createRuntimeAI } from './runtime-ai';
 
 // Serialized into the user-script world; no extension credentials enter this code.
 export function installAuto(
@@ -50,7 +51,7 @@ export function installAuto(
       const item = { plan: p, url: location.href, controller, cleanup: [] as (() => void)[] };
       live.set(p.id, item);
       const call = async (action: string, options = {}) => {
-        controller.signal.throwIfAborted();
+        if (action !== 'ai-cancel') controller.signal.throwIfAborted();
         const r = await chrome.runtime.sendMessage({
           type: 'CUSTOM_AUTO_CALL',
           toolId: p.id,
@@ -63,6 +64,7 @@ export function installAuto(
         return r.data;
       };
       const ctx = {
+        ai: createRuntimeAI(call, controller.signal),
         params: p.params,
         signal: controller.signal,
         onCleanup(fn: () => void) {
@@ -154,5 +156,5 @@ export function autoCode(tools: CustomTool[]) {
         a = autoSettings(v.autoStart);
       return `{...${JSON.stringify({ id: t.id, versionId: v.id, matches: autoMatches(a), rerunOnRoute: a.rerunOnRoute, params: v.params, css: v.css })},init:async function(ctx){"use strict";\n${v.script}\n}}`;
     });
-  return `(()=>{const parsePattern=${parsePattern.toString()}; const matchesPattern=${matchesPattern.toString()}; (${installAuto.toString()})([${plans.join(',')}],${matchesRules.toString()},${normalizeResult.toString()});})()`;
+  return `(()=>{const createRuntimeAI=${createRuntimeAI.toString()}; const parsePattern=${parsePattern.toString()}; const matchesPattern=${matchesPattern.toString()}; (${installAuto.toString()})([${plans.join(',')}],${matchesRules.toString()},${normalizeResult.toString()});})()`;
 }

@@ -1,5 +1,6 @@
 import { capturePage, extractPageText } from './page';
-import { captureError } from './capture-error';
+import { checkCaptureDocument } from './capture-document';
+import { captureError, isProtectedStore } from './capture-error';
 import {
   capturePositions,
   checkCanvasSize,
@@ -31,7 +32,8 @@ async function pngData(canvas: OffscreenCanvas) {
   return 'data:image/png;base64,' + btoa(binary);
 }
 export async function runTool(id: string, tool: ToolId, tabId: number): Promise<ToolResult> {
-  if (!toolDefinitions.some((t) => t.id === tool)) throw new Error('未知工具');
+  if (tool !== 'extract-text' && !toolDefinitions.some((t) => t.id === tool))
+    throw new Error('未知工具');
   if (status?.running) throw new Error('已有工具正在运行，请等待或取消');
   const tab = await chrome.tabs.get(tabId);
   if (!tab.url || !/^https?:\/\//.test(tab.url))
@@ -50,8 +52,14 @@ export async function runTool(id: string, tool: ToolId, tabId: number): Promise<
   const currentTab = async () => {
     check();
     const current = await chrome.tabs.get(tabId);
-    if (current.url !== tab.url || !current.active)
-      throw new Error('页面或活动标签已变化，截图已停止');
+    if (!current.active) throw new Error('目标标签页已切换，截图已停止');
+    if (isProtectedStore(tab.url!)) {
+      // Protected pages cannot be probed with scripting; keep their conservative URL check.
+      if (current.url !== tab.url) throw new Error('受保护页面地址已变化，截图已停止');
+    } else {
+      documentId = await checkCaptureDocument(tabId, documentId);
+    }
+    check();
   };
   const exec = async (command: 'prepare' | 'move' | 'restore', full: boolean, x = 0, y = 0) => {
     const results = await chrome.scripting.executeScript({
@@ -64,6 +72,38 @@ export async function runTool(id: string, tool: ToolId, tabId: number): Promise<
   };
   const name = `pagecraft-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   try {
+    if (isProtectedStore(tab.url)) {
+      if (tool !== 'screenshot-visible')
+        throw new Error(
+          'Chrome 扩展商店禁止页面脚本注入，无法使用整页截图或文本提取；网站授权无法解除此限制。请改用“可视区域截图”或系统截图。',
+        );
+      await currentTab();
+      await delay(Math.max(0, 650 - (Date.now() - lastCapture)));
+      await currentTab();
+      lastCapture = Date.now();
+      const data = await chrome.tabs
+        .captureVisibleTab(tab.windowId, { format: 'png' })
+        .catch((error) => {
+          throw captureError(error, tab.url);
+        });
+      await currentTab();
+      const bitmap = await createImageBitmap(dataBlob(data));
+      try {
+        check();
+        status.stage = '已完成';
+        status.current = 1;
+        return {
+          kind: 'image',
+          filename: name + '.png',
+          data,
+          width: bitmap.width,
+          height: bitmap.height,
+          warning: '受保护页面仅截取当前可视区域，不读取或修改页面内容。',
+        };
+      } finally {
+        bitmap.close();
+      }
+    }
     if (tool === 'extract-text') {
       const [result] = await chrome.scripting.executeScript({
         target: { tabId },

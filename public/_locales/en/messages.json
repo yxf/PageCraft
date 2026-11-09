@@ -1,0 +1,7 @@
+{
+  "extensionName": { "message": "PageCraft" },
+  "extensionDescription": {
+    "message": "Customize webpages with natural language. Save your crafts and apply them automatically on your next visit."
+  },
+  "actionTitle": { "message": "Open PageCraft" }
+}

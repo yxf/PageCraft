@@ -1,7 +1,9 @@
 import { test } from 'node:test';
+import './i18n.test';
 import './stream.test';
 import './tools.test';
 import './custom.test';
+import './runtime-ai.test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { checkScript, validateGenerated } from '../src/check';
@@ -13,6 +15,30 @@ import { normalizeSettings, updateSettings, publicSettings } from '../src/provid
 import { type Craft } from '../src/types';
 import { emptyState } from '../src/types';
 import { transact } from '../src/store';
+import { conversationHistory, type ConversationEntry } from '../src/conversation';
+test('conversation history is bounded and isolated by feature', () => {
+  const entry = (
+    targetId: string,
+    status: ConversationEntry['status'] = 'saved',
+  ): ConversationEntry => ({
+    id: 'id',
+    targetId,
+    prompt: 'x'.repeat(2000),
+    message: '',
+    status,
+  });
+  const entries = [
+    ...Array.from({ length: 10 }, () => entry('one')),
+    entry('two'),
+    entry('one', 'error'),
+    entry('one', 'pending'),
+    { ...entry('one'), undone: true },
+  ];
+  assert.equal(conversationHistory(entries).length, 0);
+  assert.equal(conversationHistory(entries, 'one').length, 6);
+  assert.equal(conversationHistory(entries, 'one')[0].length, 1500);
+  assert.equal(conversationHistory(entries, 'two').length, 1);
+});
 const craft = (script: string, css = ''): Craft => ({
   id: 'test',
   name: 'Test',

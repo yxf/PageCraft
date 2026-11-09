@@ -12,7 +12,7 @@ export async function readAIStream(
   response: Response,
   provider: Provider,
   signal: AbortSignal,
-  progress?: (chars: number) => void,
+  progress?: (chars: number, text?: string) => void,
 ) {
   if (!response.body) throw new Error('模型未返回响应流');
   const reader = response.body.getReader();
@@ -76,7 +76,7 @@ export async function readAIStream(
         completed = true;
       }
     }
-    progress?.(text.length);
+    progress?.(text.length, text);
   };
   try {
     while (!completed) {

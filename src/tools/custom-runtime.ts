@@ -1,3 +1,4 @@
+import { createRuntimeAI } from './runtime-ai';
 export function executeCustom(
   id: string,
   params: Record<string, unknown>,
@@ -12,7 +13,7 @@ export function executeCustom(
   root[key] = () => controller.abort();
   const timer = setTimeout(() => controller.abort(), 120000);
   const call = async (action: string, options = {}) => {
-    controller.signal.throwIfAborted();
+    if (action !== 'ai-cancel') controller.signal.throwIfAborted();
     const reply = await chrome.runtime.sendMessage({
       type: 'CUSTOM_TOOL_CALL',
       id,
@@ -30,6 +31,7 @@ export function executeCustom(
     cleanup.push(() => style.remove());
   }
   const ctx = {
+    ai: createRuntimeAI(call, controller.signal),
     params,
     signal: controller.signal,
     onCleanup(fn: () => void) {
@@ -64,6 +66,7 @@ export function executeCustom(
       error: error instanceof Error ? error.message : String(error),
     }))
     .finally(() => {
+      controller.abort();
       clearTimeout(timer);
       for (const fn of cleanup.reverse()) {
         try {
@@ -79,5 +82,5 @@ export function customCode(
   css: string,
   script: string,
 ) {
-  return `(${executeCustom.toString()})(${JSON.stringify(id)},${JSON.stringify(params)},${JSON.stringify(css)},async function(ctx){"use strict";\n${script}\n})`;
+  return `(()=>{const createRuntimeAI=${createRuntimeAI.toString()};return (${executeCustom.toString()})(${JSON.stringify(id)},${JSON.stringify(params)},${JSON.stringify(css)},async function(ctx){"use strict";\n${script}\n});})()`;
 }

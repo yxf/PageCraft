@@ -1,9 +1,10 @@
+import { t, getLocale } from '../i18n';
 import { useEffect, useState } from 'react';
 import {
   Plus,
   Play,
   Save,
-  Sparkles,
+  ArrowUp,
   Pencil,
   Trash2,
   ArrowLeft,
@@ -56,12 +57,14 @@ export function CustomTools({
   const [mode, setMode] = useState<'ai' | 'code'>('ai'),
     [includeContext, setIncludeContext] = useState(false);
   const [matchText, setMatchText] = useState('');
+  const [savedEditor, setSavedEditor] = useState('');
+  const [request, setRequest] = useState('');
+  const dirty = !!request.trim() || JSON.stringify({ draft, params, matchText }) !== savedEditor;
   const auto = draft.autoStart || defaultAutoStart();
   const [status, setStatus] = useState<CustomStatus>(),
     [pending, setPending] = useState(false);
   const [error, setError] = useState(''),
-    [notice, setNotice] = useState(''),
-    [versionId, setVersionId] = useState('');
+    [notice, setNotice] = useState('');
   const refresh = async () => {
     if (isExtension) setTools(await send('CUSTOM_LIST'));
   };
@@ -92,11 +95,18 @@ export function CustomTools({
   }, [ownBusy, onBusy]);
   const setEditor = (value?: CustomTool) => {
     setTool(value);
+    setRequest('');
     const data = value ? currentTool(value) : blank();
+    setSavedEditor(
+      JSON.stringify({
+        draft: data,
+        params: JSON.stringify(data.params, null, 2),
+        matchText: (data.autoStart?.matches || []).join('\n'),
+      }),
+    );
     setDraft(data);
     setMatchText((data.autoStart?.matches || []).join('\n'));
     setParams(JSON.stringify(data.params, null, 2));
-    setVersionId(value?.activeVersionId || '');
     setEditing(true);
     setError('');
     setNotice('');
@@ -106,10 +116,10 @@ export function CustomTools({
     try {
       parsed = JSON.parse(params);
     } catch {
-      throw new Error('运行参数不是有效 JSON');
+      throw new Error(t('运行参数不是有效 JSON'));
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-      throw new Error('运行参数必须是 JSON 对象');
+      throw new Error(t('运行参数必须是 JSON 对象'));
     return {
       ...draft,
       params: parsed,
@@ -119,23 +129,24 @@ export function CustomTools({
   const accessAuto = async (value: Draft) => {
     const a = autoSettings(value.autoStart);
     if (!a.enabled) return;
-    if (!isExtension) throw new Error('请在 Chrome 扩展中保存自动工具');
+    if (!isExtension) throw new Error(t('请在 Chrome 扩展中保存自动工具'));
     const origins = originsFor(autoMatches(a));
     if (
       !(await chrome.permissions.contains({ origins })) &&
       !(await chrome.permissions.request({ origins }))
     )
-      throw new Error('未授予自动启动范围的网站权限');
+      throw new Error(t('未授予自动启动范围的网站权限'));
   };
   const access = async () => {
-    if (!isExtension) throw new Error('请在 Chrome 扩展中使用自建工具');
-    if (!tab.id || !tab.url || !/^https?:\/\//.test(tab.url)) throw new Error('请切换到普通网页');
+    if (!isExtension) throw new Error(t('请在 Chrome 扩展中使用自建工具'));
+    if (!tab.id || !tab.url || !/^https?:\/\//.test(tab.url))
+      throw new Error(t('请切换到普通网页'));
     const origins = [new URL(tab.url).origin + '/*'];
     if (
       !(await chrome.permissions.contains({ origins })) &&
       !(await chrome.permissions.request({ origins }))
     )
-      throw new Error('未授予当前网站权限');
+      throw new Error(t('未授予当前网站权限'));
   };
   const action = async (fn: () => Promise<void>) => {
     setPending(true);
@@ -160,46 +171,54 @@ export function CustomTools({
         ...(saved ? { toolId: saved.id } : { data: data() }),
       });
       onResult(result);
-      setNotice('运行完成');
+      setNotice(t('运行完成'));
     });
   return (
     <section className="custom-tools">
       <div className="section-title">
         <h2>
-          我的工具 <span className="count">{tools.length}</span>
+          {t('我的工具')}
+          <span className="count">{tools.length}</span>
         </h2>
-        <button disabled={busy} onClick={() => setEditor()}>
+        <button
+          disabled={busy}
+          onClick={() => {
+            setMode('ai');
+            setEditor();
+          }}
+        >
           <Plus size={16} />
-          创建工具
+          {t('创建工具')}
         </button>
       </div>
       {ownBusy && (
         <div className="tool-progress" role="status">
           <LoaderCircle className="spin" size={16} />
           <span>
-            {status?.running ? status.stage : '正在处理'}
-            {status?.running && status.receivedChars ? ` · ${status.receivedChars} 字符` : ''}
+            {status?.running ? t(status.stage) : t('正在处理')}
+            {status?.running && status.receivedChars ? t(' · {0} 字符', status.receivedChars) : ''}
           </span>
           <button
-            aria-label="取消自建工具任务"
-            title="取消自建工具任务"
+            aria-label={t('取消自建工具任务')}
+            className="tool-stop"
+            title={t('取消自建工具任务')}
             disabled={!status?.running}
             onClick={() =>
               void send('CUSTOM_CANCEL', { id: status?.id }).catch((e) => setError(e.message))
             }
           >
-            <Square size={16} />
+            <Square size={14} fill="currentColor" strokeWidth={0} />
           </button>
         </div>
       )}
       {error && (
         <div className="message error" role="alert">
-          {error}
+          {t(error)}
         </div>
       )}
       {notice && (
         <div className="message success" role="status">
-          {notice}
+          {t(notice)}
         </div>
       )}
       {editing ? (
@@ -208,77 +227,87 @@ export function CustomTools({
             className="quiet"
             disabled={busy}
             onClick={() => {
-              if (confirm('离开编辑？未保存的修改将丢失。')) setEditing(false);
+              if (!dirty || confirm(t('离开编辑？未保存的修改将丢失。'))) setEditing(false);
             }}
           >
             <ArrowLeft size={16} />
-            工具列表
+            {t('工具列表')}
           </button>
-          <div className="button-row" role="tablist" aria-label="创建方式">
+          <div className="tool-editor-modes" role="tablist" aria-label={t('创建方式')}>
             <button role="tab" aria-selected={mode === 'ai'} onClick={() => setMode('ai')}>
-              自然语言
+              {t('自然语言')}
             </button>
             <button role="tab" aria-selected={mode === 'code'} onClick={() => setMode('code')}>
-              手动编写
+              {t('手动编写')}
             </button>
           </div>
           <fieldset disabled={busy}>
             {mode === 'ai' && (
-              <>
-                <label>
-                  功能需求
+              <section className="tool-ai-input" aria-label={t('AI 生成工具')}>
+                <div className="conversation-target">
+                  <span>{tool ? t('正在编辑：{0}', currentTool(tool).name) : t('新增工具')}</span>
+                </div>
+                <div className="composer">
                   <textarea
-                    aria-label="工具功能需求"
+                    aria-label={t('工具功能需求')}
                     rows={4}
-                    value={draft.prompt}
-                    onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
+                    maxLength={6000}
+                    placeholder={tool ? t('描述你想调整的地方…') : t('描述要创建的工具…')}
+                    value={request}
+                    onChange={(e) => setRequest(e.target.value)}
                   />
-                </label>
+                  <div className="composer-bottom">
+                    <span>{request.length} / 6000</span>
+                    <button
+                      className="primary generate"
+                      title={t('生成代码')}
+                      aria-label={t('生成代码')}
+                      disabled={!request.trim()}
+                      onClick={() =>
+                        void action(async () => {
+                          if (includeContext) await access();
+                          const previous = draft.name.trim() ? data() : undefined;
+                          const generated = await send('CUSTOM_GENERATE', {
+                            prompt: request,
+                            previous,
+                            params: data().params,
+                            includeContext,
+                            tabId: tab.id,
+                            autoStart: data().autoStart,
+                          });
+                          setDraft({ ...generated, autoStart: data().autoStart });
+                          setParams(JSON.stringify(generated.params, null, 2));
+                          setRequest('');
+                          setNotice(t('已生成草稿，尚未运行或保存'));
+                        })
+                      }
+                    >
+                      <ArrowUp size={18} />
+                    </button>
+                  </div>
+                </div>
                 <label className="checkbox">
                   <input
                     type="checkbox"
                     checked={includeContext}
                     onChange={(e) => setIncludeContext(e.target.checked)}
                   />
-                  <span>生成时发送当前页摘要</span>
+                  <span>{t('附带当前页摘要')}</span>
                 </label>
-                <button
-                  disabled={!draft.prompt.trim()}
-                  onClick={() =>
-                    void action(async () => {
-                      if (includeContext) await access();
-                      const previous = draft.name.trim() ? data() : undefined;
-                      const generated = await send('CUSTOM_GENERATE', {
-                        prompt: draft.prompt,
-                        previous,
-                        params: data().params,
-                        includeContext,
-                        tabId: tab.id,
-                        autoStart: data().autoStart,
-                      });
-                      setDraft({ ...generated, autoStart: data().autoStart });
-                      setParams(JSON.stringify(generated.params, null, 2));
-                      setNotice('已生成草稿，尚未运行或保存');
-                    })
-                  }
-                >
-                  <Sparkles size={16} />
-                  生成代码
-                </button>
-              </>
+              </section>
             )}
             <label>
-              工具名称
+              {t('工具名称')}
               <input
-                aria-label="工具名称"
+                aria-label={t('工具名称')}
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               />
             </label>
             <label>
-              工具说明
+              {t('工具说明')}
               <textarea
-                aria-label="工具说明"
+                aria-label={t('工具说明')}
                 rows={3}
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
@@ -287,7 +316,7 @@ export function CustomTools({
             <label>
               JavaScript
               <textarea
-                aria-label="工具 JavaScript"
+                aria-label={t('工具 JavaScript')}
                 className="code source"
                 spellCheck={false}
                 value={draft.script}
@@ -295,9 +324,9 @@ export function CustomTools({
               />
             </label>
             <label>
-              运行参数（JSON）
+              {t('运行参数（JSON）')}
               <textarea
-                aria-label="工具运行参数"
+                aria-label={t('工具运行参数')}
                 className="code"
                 rows={3}
                 spellCheck={false}
@@ -306,9 +335,9 @@ export function CustomTools({
               />
             </label>
             <details>
-              <summary>临时 CSS</summary>
+              <summary>{t('临时 CSS')}</summary>
               <textarea
-                aria-label="工具 CSS"
+                aria-label={t('工具 CSS')}
                 className="code"
                 rows={3}
                 value={draft.css}
@@ -323,14 +352,14 @@ export function CustomTools({
                   setDraft({ ...draft, autoStart: { ...auto, enabled: e.target.checked } })
                 }
               />
-              <span>自动启动</span>
+              <span>{t('自动启动')}</span>
             </label>
             {auto.enabled && (
               <>
                 <label>
-                  生效范围
+                  {t('生效范围')}
                   <select
-                    aria-label="自动启动范围"
+                    aria-label={t('自动启动范围')}
                     value={auto.scope}
                     onChange={(e) =>
                       setDraft({
@@ -339,15 +368,15 @@ export function CustomTools({
                       })
                     }
                   >
-                    <option value="all">所有网站（需授权）</option>
-                    <option value="sites">指定网站</option>
+                    <option value="all">{t('所有网站（需授权）')}</option>
+                    <option value="sites">{t('指定网站')}</option>
                   </select>
                 </label>
                 {auto.scope === 'sites' && (
                   <label>
-                    网址规则
+                    {t('网址规则')}
                     <textarea
-                      aria-label="自动启动网址规则"
+                      aria-label={t('自动启动网址规则')}
                       rows={3}
                       placeholder="https://example.com/*"
                       value={matchText}
@@ -363,20 +392,20 @@ export function CustomTools({
                       setDraft({ ...draft, autoStart: { ...auto, rerunOnRoute: e.target.checked } })
                     }
                   />
-                  <span>SPA 路由变化时重新运行</span>
+                  <span>{t('SPA 路由变化时重新运行')}</span>
                 </label>
                 <p className="settings-note">
-                  保存后立即在已打开的匹配网页生效；代码可能联网或产生不可撤销的操作。
+                  {t('保存后立即在已打开的匹配网页生效；代码可能联网或产生不可撤销的操作。')}
                 </p>
               </>
             )}
             <p className="settings-note">
-              自建代码可读取或修改页面并联网；试运行会真实执行，取消不能撤销所有副作用。
+              {t('自建代码可读取或修改页面并联网；试运行会真实执行，取消不能撤销所有副作用。')}
             </p>
             <div className="button-row">
               <button onClick={() => run()}>
                 <Play size={16} />
-                试运行
+                {t('试运行')}
               </button>
               <button
                 className="primary"
@@ -390,91 +419,100 @@ export function CustomTools({
                       data: value,
                     });
                     setEditor(saved);
-                    setNotice('工具已保存');
+                    setNotice(t('工具已保存'));
                   })
                 }
               >
                 <Save size={16} />
-                保存工具
+                {t('保存工具')}
               </button>
             </div>
             {tool && (
-              <div className="custom-history">
-                <label>
-                  历史版本
-                  <select
-                    aria-label="工具历史版本"
-                    value={versionId}
-                    onChange={(e) => setVersionId(e.target.value)}
-                  >
-                    {tool.versions.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {new Date(v.createdAt).toLocaleString()} · {v.name}
-                        {v.id === tool.activeVersionId ? '（当前）' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  disabled={versionId === tool.activeVersionId}
-                  onClick={() =>
-                    void action(async () => {
-                      await accessAuto(tool.versions.find((v) => v.id === versionId)!);
-                      const saved = await send('CUSTOM_ROLLBACK', {
-                        id: tool.id,
-                        versionId,
-                        expectedVersion: tool.activeVersionId,
-                      });
-                      setEditor(saved);
-                      setNotice('已恢复所选版本');
-                    })
-                  }
-                >
-                  <RotateCcw size={16} />
-                  恢复版本
-                </button>
+              <div className="history" aria-label={t('工具版本记录')}>
+                <h2>{t('版本记录')}</h2>
+                {tool.versions.map((version, i) => (
+                  <div className="history-row" key={version.id}>
+                    <div>
+                      <strong>
+                        {new Date(version.createdAt).toLocaleString(getLocale(), {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </strong>
+                      <span>{version.prompt}</span>
+                    </div>
+                    {version.id === tool.activeVersionId ? (
+                      <small>{t('当前版本')}</small>
+                    ) : (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={t('回退到版本 {0}', tool.versions.length - i)}
+                        aria-label={t('回退到版本 {0}', tool.versions.length - i)}
+                        disabled={busy}
+                        onClick={() =>
+                          void action(async () => {
+                            await accessAuto(version);
+                            const saved = await send('CUSTOM_ROLLBACK', {
+                              id: tool.id,
+                              versionId: version.id,
+                              expectedVersion: tool.activeVersionId,
+                            });
+                            setEditor(saved);
+                            setNotice(t('已恢复所选版本'));
+                          })
+                        }
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </fieldset>
         </div>
       ) : (
         <div className="custom-list">
-          {!tools.length && <p className="muted">暂无自建工具</p>}
+          {!tools.length && <p className="muted">{t('暂无自建工具')}</p>}
           {tools.map((item) => {
             const version = currentTool(item);
             return (
               <article className="custom-row" key={item.id}>
                 <div>
                   <h3>{version.name}</h3>
-                  <p>{version.description}</p>
-                  <p className="muted">{version.autoStart?.enabled ? '自动启动' : '手动运行'}</p>
+                  <p className="muted">
+                    {version.autoStart?.enabled ? t('自动启动') : t('手动运行')}
+                  </p>
                 </div>
                 <div className="button-row">
                   <button
-                    title={`运行 ${version.name}`}
-                    aria-label={`运行 ${version.name}`}
+                    title={t('运行 {0}', version.name)}
+                    aria-label={t('运行 {0}', version.name)}
                     disabled={busy}
                     onClick={() => run(item)}
                   >
                     <Play size={16} />
                   </button>
                   <button
-                    title={`编辑 ${version.name}`}
-                    aria-label={`编辑 ${version.name}`}
+                    title={t('编辑 {0}', version.name)}
+                    aria-label={t('编辑 {0}', version.name)}
                     disabled={busy}
                     onClick={() => {
-                      setMode('code');
+                      setMode('ai');
                       setEditor(item);
                     }}
                   >
                     <Pencil size={16} />
                   </button>
                   <button
-                    title={`删除 ${version.name}`}
-                    aria-label={`删除 ${version.name}`}
+                    title={t('删除 {0}', version.name)}
+                    aria-label={t('删除 {0}', version.name)}
                     disabled={busy}
                     onClick={() => {
-                      if (confirm(`删除工具“${version.name}”及其版本？`))
+                      if (confirm(t('删除工具“{0}”及其版本？', version.name)))
                         void action(async () => {
                           await send('CUSTOM_DELETE', { id: item.id });
                         });

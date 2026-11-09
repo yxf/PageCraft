@@ -1,9 +1,9 @@
 export const toolDefinitions = [
   { id: 'screenshot-visible', name: '可视区域截图', kind: 'image' },
   { id: 'screenshot-full', name: '整页截图', kind: 'image' },
-  { id: 'extract-text', name: '提取页面文本', kind: 'text' },
 ] as const;
-export type ToolId = (typeof toolDefinitions)[number]['id'];
+// Text extraction remains available to custom tools, without a standalone list entry.
+export type ToolId = (typeof toolDefinitions)[number]['id'] | 'extract-text';
 export interface ToolStatus {
   id: string;
   tool: ToolId;

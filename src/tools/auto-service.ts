@@ -4,6 +4,7 @@ import { autoSettings, autoMatches, currentTool, validateCustom } from './custom
 import { autoCode } from './auto-runtime';
 import { runTool, getToolStatus } from './runner';
 import { customStatus } from './custom-service';
+import { runRuntimeAI, cancelRuntimeAI } from './runtime-ai';
 
 export async function requireAuto(raw: any) {
   const v = validateCustom(raw),
@@ -68,6 +69,12 @@ export async function syncAuto() {
   }
 }
 export async function autoMessage(m: any, sender: chrome.runtime.MessageSender) {
+  const owner = `auto:${m.toolId}:${m.versionId}:${sender.tab?.id}:${sender.documentId}`;
+  if (m.action === 'ai-cancel') {
+    cancelRuntimeAI(owner, m.options?.requestId);
+    return;
+  }
+  if (m.action === 'ai') return runRuntimeAI(owner, m.options, () => validateAuto(m, sender));
   const tools = await allowedTools();
   if (m.type === 'CUSTOM_AUTO_LEASE')
     return { allowed: tools.map((t) => ({ id: t.id, versionId: t.activeVersionId })) };
@@ -93,4 +100,19 @@ export async function autoMessage(m: any, sender: chrome.runtime.MessageSender) 
         : 'screenshot-visible',
     sender.tab.id,
   );
+}
+async function validateAuto(m: any, sender: chrome.runtime.MessageSender) {
+  const tool = (await allowedTools()).find(
+    (t) => t.id === m.toolId && t.activeVersionId === m.versionId,
+  );
+  if (!tool || !sender.tab?.id || !sender.documentId) throw new Error('自动工具已停用');
+  const [doc] = await chrome.scripting.executeScript({
+    target: { tabId: sender.tab.id, documentIds: [sender.documentId] },
+    func: () => location.href,
+  });
+  if (
+    !doc?.result ||
+    !matchesRules(autoMatches(autoSettings(currentTool(tool).autoStart)), [], doc.result)
+  )
+    throw new Error('页面不在工具范围内');
 }

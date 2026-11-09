@@ -1,5 +1,7 @@
 # 自定义通用工具
 
+新增通用运行时接口 `await ctx.ai.ask({instruction,input,signal})`，返回文本，手动和自动工具均可使用。详见 [运行时 AI](RUNTIME_AI.md)。
+
 ## 使用流程
 
 1. 重新加载扩展，在扩展详情开启“允许用户脚本”。

@@ -51,6 +51,7 @@ try {
     channel: 'chromium',
     headless: true,
     viewport: null,
+    locale: 'zh-CN',
     args: [`--disable-extensions-except=${testExtension}`, `--load-extension=${testExtension}`],
   });
   let worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
@@ -68,6 +69,9 @@ try {
   console.log('User scripts enabled:', info.userScriptsAccess);
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${id}/options.html`);
+  await panel.locator('.brand img').waitFor();
+  assert.equal(await panel.locator('.brand img').getAttribute('src'), '/icons/icon-128.png');
+  await panel.waitForFunction(() => document.querySelector('.brand img')?.naturalWidth === 128);
   const rpc = async (type, payload = {}) => {
     console.log('RPC', type);
     const r = await panel.evaluate((m) => chrome.runtime.sendMessage(m), { type, ...payload });
@@ -78,6 +82,122 @@ try {
   assert.equal(state.available, true);
   const page = await context.newPage();
   await page.goto(base + '/fixtures/article.html');
+  assert.equal(
+    await worker.evaluate(() => chrome.action.getPopup({})),
+    `chrome-extension://${id}/index.html?surface=popup`,
+  );
+  assert.equal(
+    (await worker.evaluate(() => chrome.sidePanel.getPanelBehavior())).openPanelOnActionClick,
+    false,
+  );
+  const popupPage = await context.newPage();
+  await popupPage.setViewportSize({ width: 420, height: 600 });
+  await popupPage.goto(`chrome-extension://${id}/index.html?surface=popup`);
+  await popupPage.getByRole('heading', { name: '127.0.0.1', exact: true }).waitFor();
+  await popupPage.getByRole('textbox', { name: '改造需求' }).fill('弹出框草稿');
+  await popupPage.evaluate(() => {
+    window.close = () => {
+      window.popupClosed = true;
+    };
+    chrome.sidePanel.open = async () => {
+      throw new Error('mock denied');
+    };
+  });
+  await popupPage.getByRole('button', { name: '在侧边栏打开', exact: true }).click();
+  await popupPage.getByText('无法打开侧边栏：mock denied', { exact: true }).waitFor();
+  assert.equal(await popupPage.evaluate(() => !!window.popupClosed), false);
+  await popupPage.evaluate(() => {
+    chrome.sidePanel.open = async (options) => {
+      window.panelOpenOptions = options;
+    };
+  });
+  await popupPage.getByRole('button', { name: '在侧边栏打开', exact: true }).click();
+  await popupPage.waitForFunction(() => window.popupClosed);
+  assert.equal(await worker.evaluate(() => chrome.action.getPopup({})), '');
+  assert.equal(
+    (await worker.evaluate(() => chrome.sidePanel.getPanelBehavior())).openPanelOnActionClick,
+    true,
+  );
+  assert.equal(
+    await worker.evaluate(async () => (await chrome.storage.local.get('surfaceMode')).surfaceMode),
+    'sidepanel',
+  );
+  assert.equal(typeof (await popupPage.evaluate(() => window.panelOpenOptions.windowId)), 'number');
+  await popupPage.reload();
+  await popupPage.getByRole('textbox', { name: '改造需求' }).waitFor();
+  await popupPage.waitForFunction(
+    () => document.querySelector('textarea[aria-label="改造需求"]')?.value === '弹出框草稿',
+  );
+  assert.ok(await popupPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await popupPage.screenshot({ path: 'artifacts/popup.png' });
+  assert.equal(
+    await popupPage.locator('.app').evaluate((el) => Math.round(el.getBoundingClientRect().width)),
+    420,
+  );
+  assert.equal(
+    await popupPage
+      .locator('main')
+      .evaluate((el) => getComputedStyle(el, '::-webkit-scrollbar').width),
+    '6px',
+  );
+  await popupPage.setViewportSize({ width: 440, height: 600 });
+  assert.equal(
+    await popupPage.locator('.app').evaluate((el) => Math.round(el.getBoundingClientRect().width)),
+    420,
+  );
+  await popupPage.goto(`chrome-extension://${id}/index.html?surface=sidepanel`);
+  await popupPage.waitForFunction(
+    () => document.querySelector('textarea[aria-label="改造需求"]')?.value === '弹出框草稿',
+  );
+  assert.equal(
+    await popupPage.getByRole('button', { name: '在侧边栏打开', exact: true }).count(),
+    0,
+  );
+  await popupPage.getByRole('button', { name: '切换到弹出框', exact: true }).waitFor();
+  assert.equal(
+    await popupPage
+      .locator('.header-actions')
+      .getByRole('button', { name: '切换到弹出框', exact: true })
+      .count(),
+    1,
+  );
+  await popupPage.screenshot({ path: 'artifacts/sidepanel-switch.png' });
+  await popupPage.evaluate(() => {
+    chrome.action.openPopup = async () => {
+      throw new Error('mock popup denied');
+    };
+    window.close = () => {
+      window.panelClosed = true;
+    };
+    chrome.sidePanel.close = async () => {
+      window.panelClosed = true;
+    };
+  });
+  await popupPage.getByRole('button', { name: '切换到弹出框', exact: true }).click();
+  await popupPage.getByText(/mock popup denied/).waitFor();
+  assert.equal(await popupPage.evaluate(() => !!window.panelClosed), false);
+  assert.equal(
+    (await worker.evaluate(() => chrome.sidePanel.getPanelBehavior())).openPanelOnActionClick,
+    false,
+  );
+  await popupPage.evaluate(() => {
+    chrome.action.openPopup = async (options) => {
+      window.popupOptions = options;
+    };
+  });
+  await popupPage.getByRole('button', { name: '切换到弹出框', exact: true }).click();
+  await popupPage.waitForFunction(() => window.panelClosed);
+  assert.equal(typeof (await popupPage.evaluate(() => window.popupOptions.windowId)), 'number');
+  assert.equal(
+    await worker.evaluate(async () => (await chrome.storage.local.get('surfaceMode')).surfaceMode),
+    'popup',
+  );
+  assert.equal(
+    await worker.evaluate(() => chrome.action.getPopup({})),
+    `chrome-extension://${id}/index.html?surface=popup`,
+  );
+  await popupPage.close();
+  await page.bringToFront();
   const tabId = await panel.evaluate(async (url) => {
     const tabs = await chrome.tabs.query({});
     return tabs.find((t) => t.url === url).id;
@@ -154,11 +274,16 @@ try {
   assert.equal((await cancelCapture).ok, false);
   assert.equal(await captureTab.evaluate(() => scrollY), 123);
   await panel.getByRole('button', { name: '工具', exact: true }).click();
-  await panel.getByRole('button', { name: '提取页面文本', exact: true }).click();
-  await panel.getByLabel('提取的页面文本').waitFor();
+  await panel.getByRole('heading', { name: '通用工具', exact: true }).waitFor();
+  assert.equal(await panel.getByRole('button', { name: '提取页面文本', exact: true }).count(), 0);
+  assert.equal(await panel.locator('.custom-row > div:first-child > p:not(.muted)').count(), 0);
+  assert.equal(await panel.getByText('当前标签页', { exact: true }).count(), 0);
+  assert.equal(await panel.locator('.tool-target').count(), 0);
+  await panel.getByRole('button', { name: '可视区域截图', exact: true }).click();
+  await panel.getByAltText('当前网页截图').waitFor();
   const toolDownload = panel.waitForEvent('download');
   await panel.getByRole('button', { name: '下载结果', exact: true }).click();
-  assert.match((await toolDownload).suggestedFilename(), /\.txt$/);
+  assert.match((await toolDownload).suggestedFilename(), /\.png$/);
   for (const width of [320, 390, 1024]) {
     await panel.setViewportSize({ width, height: 850 });
     assert.equal(
@@ -167,6 +292,17 @@ try {
     );
     await panel.screenshot({ path: `artifacts/tools-${width}.png`, fullPage: true });
   }
+  await panel.getByRole('button', { name: '创建工具', exact: true }).click();
+  await panel.evaluate(() => {
+    window.confirmCalls = 0;
+    window.originalConfirm = window.confirm;
+    window.confirm = () => {
+      window.confirmCalls++;
+      return false;
+    };
+  });
+  await panel.getByRole('button', { name: '工具列表', exact: true }).click();
+  assert.equal(await panel.evaluate(() => window.confirmCalls), 0);
   await panel.getByRole('button', { name: '创建工具', exact: true }).click();
   await panel.getByRole('tab', { name: '手动编写' }).click();
   await panel.getByLabel('工具名称', { exact: true }).fill('页面链接');
@@ -185,15 +321,39 @@ try {
   await panel.getByText('工具已保存', { exact: true }).waitFor();
   const custom = (await rpc('CUSTOM_LIST'))[0];
   const firstCustomVersion = custom.activeVersionId;
+  await panel.getByRole('button', { name: '工具列表', exact: true }).click();
+  assert.equal(await panel.evaluate(() => window.confirmCalls), 0);
+  await panel.getByRole('button', { name: '编辑 页面链接', exact: true }).click();
+  assert.equal(
+    await panel.getByRole('tab', { name: '自然语言', exact: true }).getAttribute('aria-selected'),
+    'true',
+  );
+  await panel.getByLabel('工具名称', { exact: true }).fill('未保存名称');
+  await panel.getByRole('button', { name: '工具列表', exact: true }).click();
+  assert.equal(await panel.evaluate(() => window.confirmCalls), 1);
+  assert.equal(await panel.getByLabel('工具名称', { exact: true }).inputValue(), '未保存名称');
+  await panel.getByLabel('工具名称', { exact: true }).fill('页面链接');
+  await panel.getByRole('button', { name: '工具列表', exact: true }).click();
+  assert.equal(await panel.evaluate(() => window.confirmCalls), 1);
+  await panel.getByRole('button', { name: '编辑 页面链接', exact: true }).click();
+  await panel.evaluate(() => {
+    window.confirm = window.originalConfirm;
+    delete window.originalConfirm;
+  });
   await panel.getByLabel('工具 JavaScript').fill('return "第二版";');
   await panel.getByRole('button', { name: '保存工具', exact: true }).click();
   await panel.waitForFunction(
     async () =>
       (await chrome.runtime.sendMessage({ type: 'CUSTOM_LIST' })).data?.[0]?.versions.length === 2,
   );
-  await panel.getByLabel('工具历史版本').selectOption(firstCustomVersion);
-  await panel.getByRole('button', { name: '恢复版本', exact: true }).click();
+  await panel.locator('.custom-editor .history-row').nth(1).waitFor();
+  assert.equal(await panel.locator('.custom-editor .history-row').count(), 2);
+  assert.equal(await panel.locator('.custom-editor .history-row small').innerText(), '当前版本');
+  await panel.getByRole('button', { name: '回退到版本 1', exact: true }).click();
   await panel.getByText('已恢复所选版本', { exact: true }).waitFor();
+  assert.equal((await rpc('CUSTOM_LIST'))[0].activeVersionId, firstCustomVersion);
+  assert.equal(await panel.getByRole('button', { name: '回退到版本 1', exact: true }).count(), 0);
+  assert.equal(await panel.getByRole('button', { name: '回退到版本 2', exact: true }).count(), 1);
   for (const width of [320, 1024]) {
     await panel.setViewportSize({ width, height: 900 });
     assert.equal(
@@ -430,6 +590,34 @@ try {
     includeContext: false,
   });
   assert.equal(typeof generatedTool.script, 'string');
+  assert.equal(generatedTool.name, '阅读改造');
+  const revisedTool = await rpc('CUSTOM_GENERATE', {
+    prompt: '优化已有工具，不更改名称',
+    previous: { ...generatedTool, name: '用户保留的工具名称' },
+    params: {},
+    includeContext: false,
+  });
+  assert.equal(revisedTool.name, '用户保留的工具名称');
+  const promptTool = await rpc('CUSTOM_SAVE', {
+    data: { ...revisedTool, prompt: '不应回填的历史需求' },
+  });
+  await panel.reload();
+  await panel.getByRole('button', { name: '工具', exact: true }).click();
+  await panel.getByRole('button', { name: '编辑 用户保留的工具名称', exact: true }).click();
+  const toolRequest = panel.getByLabel('工具功能需求', { exact: true });
+  assert.equal(await toolRequest.inputValue(), '');
+  await toolRequest.fill('优化工具交互');
+  await panel.getByRole('button', { name: '生成代码', exact: true }).click();
+  await panel.getByText('已生成草稿，尚未运行或保存', { exact: true }).waitFor();
+  assert.equal(await toolRequest.inputValue(), '');
+  for (const width of [320, 420, 1024]) {
+    await panel.setViewportSize({ width, height: 850 });
+    assert.ok(await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await panel.screenshot({ path: `artifacts/tool-ai-editor-${width}.png`, fullPage: true });
+    assert.equal(Math.round((await toolRequest.boundingBox()).height), 80);
+  }
+  await rpc('CUSTOM_DELETE', { id: promptTool.id });
+  await panel.reload();
   assert.equal((await rpc('CUSTOM_LIST')).length, 1);
   await worker.evaluate(() => {
     globalThis.fetch = async () =>
@@ -541,7 +729,10 @@ try {
   await rpc('TOGGLE', { id: copyCraft.craftId, enabled: false });
   assert.equal(await page.getByRole('button', { name: '复制代码' }).count(), 0);
   await panel.reload();
-  await panel.getByRole('button', { name: /阅读改造/ }).waitFor();
+  await panel
+    .getByRole('button', { name: /阅读改造/ })
+    .first()
+    .waitFor();
   for (const width of [390, 320, 1024]) {
     await panel.setViewportSize({ width, height: 900 });
     await panel.screenshot({ path: `artifacts/library-${width}.png`, fullPage: true });
@@ -554,6 +745,8 @@ try {
     assert.equal(await panel.getByLabel('模型 ID', { exact: true }).inputValue(), 'test-model');
   }
   await panel.setViewportSize({ width: 320, height: 800 });
+  assert.equal(await panel.locator('.settings-section .settings-section').count(), 0);
+  assert.equal(await panel.getByRole('heading', { name: '网页悬浮按钮', exact: true }).count(), 0);
   assert.equal(
     await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     true,
@@ -561,8 +754,169 @@ try {
   await panel.screenshot({ path: 'artifacts/settings-mobile.png', fullPage: true });
   await panel.setViewportSize({ width: 1024, height: 800 });
   await panel.screenshot({ path: 'artifacts/settings.png', fullPage: true });
+  await panel.getByLabel('模型 ID', { exact: true }).fill('unsaved-model');
+  await panel.getByLabel('界面语言', { exact: true }).selectOption('en');
+  await panel.getByRole('heading', { name: 'Settings', exact: true, level: 1 }).waitFor();
+  assert.equal(
+    await panel
+      .getByRole('region', { name: 'General settings', exact: true })
+      .getByLabel('Interface language')
+      .count(),
+    1,
+  );
+  assert.equal(
+    await panel
+      .getByRole('region', { name: 'AI configuration', exact: true })
+      .getByLabel('Interface language')
+      .count(),
+    0,
+  );
+  assert.equal(await panel.getByLabel('Model ID', { exact: true }).inputValue(), 'unsaved-model');
+  assert.equal(await panel.locator('html').getAttribute('lang'), 'en');
+  const localePage = await context.newPage();
+  await localePage.goto(`chrome-extension://${id}/index.html?surface=popup`);
+  await localePage.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await localePage.getByLabel('Interface language').inputValue(), 'en');
+  await localePage.close();
+  for (const width of [320, 420, 1024]) {
+    await panel.setViewportSize({ width, height: 850 });
+    for (const view of ['Settings', 'Tools', 'Crafts', 'Current']) {
+      await panel
+        .locator('.tabs')
+        .getByRole('button', { name: new RegExp(`^${view}`) })
+        .click();
+      assert.ok(
+        await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+        `${view}: English overflow at ${width}`,
+      );
+      await panel.screenshot({
+        path: `artifacts/i18n-${view.replaceAll(' ', '-')}-${width}.png`,
+        fullPage: true,
+      });
+    }
+  }
+  await panel.getByRole('button', { name: 'Tools', exact: true }).click();
+  await panel.getByRole('button', { name: 'Create tool', exact: true }).click();
+  await panel.getByLabel('Tool request').fill('保留用户输入');
+  await worker.evaluate(() => chrome.storage.local.set({ language: 'zh-CN' }));
+  await panel.getByRole('tab', { name: '自然语言', exact: true }).waitFor();
+  assert.equal(await panel.getByLabel('工具功能需求').inputValue(), '保留用户输入');
+  await panel.reload();
+  await panel.getByRole('button', { name: '设置', exact: true }).click();
+  assert.equal(await panel.getByLabel('界面语言').inputValue(), 'zh-CN');
+  await panel.getByLabel('界面语言').selectOption('auto');
+  assert.equal(await panel.locator('html').getAttribute('lang'), 'zh-CN');
   await panel.getByRole('button', { name: '当前页面', exact: true }).click();
   await panel.getByRole('heading', { name: '127.0.0.1', exact: true }).waitFor();
+  await worker.evaluate(() => {
+    globalThis.fetch = async (_url, options) => {
+      globalThis.conversationRequest = JSON.parse(options.body);
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              content: [
+                {
+                  type: 'output_text',
+                  text: JSON.stringify({
+                    name: JSON.parse(globalThis.conversationRequest.input).previous
+                      ? '模型试图修改标题'
+                      : '对话测试',
+                    description: '连续优化测试',
+                    css: '',
+                    steps: ['检查页面'],
+                    script:
+                      'document.body.dataset.conversationTest="ok";ctx.onCleanup(()=>delete document.body.dataset.conversationTest);',
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+  });
+  const beforeConversation = (await rpc('STATE')).crafts.length;
+  const feature = panel.getByRole('button', { name: /^继续优化 / }).first();
+  await feature.click();
+  await panel.getByText(/^正在编辑：/).waitFor();
+  await panel.getByRole('button', { name: '退出编辑', exact: true }).click();
+  await panel.getByRole('textbox', { name: '改造需求' }).fill('新增一个独立功能');
+  await panel.getByRole('button', { name: '生成并应用', exact: true }).click();
+  await panel.getByRole('heading', { name: '已新增 · 对话测试', exact: true }).waitFor();
+  await panel.getByRole('button', { name: '继续优化 对话测试', exact: true }).waitFor();
+  let conversationCraft = (await rpc('STATE')).crafts.find((c) => c.name === '对话测试');
+  const conversationFirst = conversationCraft.activeVersionId;
+  assert.equal((await rpc('STATE')).crafts.length, beforeConversation + 1);
+  await panel.getByRole('textbox', { name: '改造需求' }).fill('再增加加载状态');
+  await panel.getByRole('button', { name: '生成并应用', exact: true }).click();
+  await panel.getByRole('heading', { name: '已更新 · 对话测试', exact: true }).waitFor();
+  conversationCraft = (await rpc('STATE')).crafts.find((c) => c.id === conversationCraft.id);
+  assert.equal(conversationCraft.versions.length, 2);
+  assert.equal(conversationCraft.name, '对话测试');
+  assert.equal((await rpc('STATE')).crafts.length, beforeConversation + 1);
+  const conversationInput = await worker.evaluate(() =>
+    JSON.parse(globalThis.conversationRequest.input),
+  );
+  assert.deepEqual(JSON.parse(conversationInput.request).previousRequests, ['新增一个独立功能']);
+  assert.ok(conversationInput.previous.script);
+  await assert.rejects(
+    () => rpc('CONVERSATION_UNDO', { craftId: conversationCraft.id, versionId: conversationFirst }),
+    /后续修改/,
+  );
+  await panel.reload();
+  await panel.getByRole('button', { name: '当前页面', exact: true }).click();
+  await panel.getByRole('heading', { name: '已更新 · 对话测试', exact: true }).waitFor();
+  await panel.getByText('正在编辑：对话测试', { exact: true }).waitFor();
+  for (const width of [320, 390, 1024]) {
+    await panel.setViewportSize({ width, height: 900 });
+    assert.ok(await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await panel.screenshot({ path: `artifacts/conversation-${width}.png`, fullPage: true });
+    const bounds = await panel.evaluate(() => {
+      const features = document.querySelector('.conversation-features').getBoundingClientRect();
+      const composer = document.querySelector('.conversation-compose').getBoundingClientRect();
+      return { featuresBottom: features.bottom, composerTop: composer.top };
+    });
+    assert.ok(bounds.featuresBottom <= bounds.composerTop + 1);
+    assert.equal(await panel.getByRole('log', { name: '改造对话' }).count(), 0);
+    await panel.locator('.conversation-page .rules > summary').click();
+    const rulesSize = await panel.locator('.conversation-page .rules').evaluate((el) => ({
+      client: el.clientHeight,
+      scroll: el.scrollHeight,
+      overflow: getComputedStyle(el).overflowY,
+    }));
+    assert.equal(rulesSize.overflow, 'visible');
+    assert.ok(rulesSize.scroll <= rulesSize.client + 1);
+    await panel.getByRole('textbox', { name: '排除规则', exact: true }).scrollIntoViewIfNeeded();
+    await panel.screenshot({ path: `artifacts/rules-expanded-${width}.png`, fullPage: true });
+    await panel.locator('.conversation-page .rules > summary').click();
+  }
+  await panel.getByRole('button', { name: '撤销本次 对话测试', exact: true }).last().click();
+  await panel.getByRole('heading', { name: '已撤销本次修改 · 对话测试', exact: true }).waitFor();
+  assert.equal(
+    (await rpc('STATE')).crafts.find((c) => c.id === conversationCraft.id).activeVersionId,
+    conversationFirst,
+  );
+  await worker.evaluate(() => {
+    globalThis.fetch = async () => {
+      throw new Error('mock conversation offline');
+    };
+  });
+  await panel.getByRole('textbox', { name: '改造需求' }).fill('失败后保留这段需求');
+  await panel.getByRole('button', { name: '生成并应用', exact: true }).click();
+  await panel.getByRole('heading', { name: '未完成', exact: true }).waitFor();
+  assert.equal(
+    await panel.getByRole('textbox', { name: '改造需求' }).inputValue(),
+    '失败后保留这段需求',
+  );
+  assert.equal(
+    (await rpc('STATE')).crafts.find((c) => c.id === conversationCraft.id).activeVersionId,
+    conversationFirst,
+  );
+  assert.equal(await panel.getByRole('button', { name: '清空对话', exact: true }).count(), 0);
+  assert.equal((await rpc('STATE')).crafts.length, beforeConversation + 1);
+  await rpc('DELETE', { id: conversationCraft.id });
   await panel.setViewportSize({ width: 390, height: 1000 });
   await panel.screenshot({ path: 'artifacts/current-page.png', fullPage: true });
   const autoDraft = {
@@ -637,8 +991,95 @@ try {
     data: { ...autoDraft, autoStart: { ...autoDraft.autoStart, scope: 'all' } },
   });
   await page.locator('#pc-auto-test').waitFor();
+  await worker.evaluate(() => {
+    globalThis.fetch = async (_url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.text?.format) throw new Error('Runtime text unexpectedly uses script JSON');
+      globalThis.lastTextRequest = body;
+      return new Response(
+        JSON.stringify({ output: [{ content: [{ type: 'output_text', text: '运行时回答' }] }] }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+  });
+  const aiDraft = {
+    name: 'AI 测试',
+    description: '',
+    prompt: '',
+    params: {},
+    css: '',
+    steps: [],
+    script: 'return await ctx.ai.ask({instruction:"总结",input:document.title,signal:ctx.signal});',
+  };
+  assert.equal((await rpc('CUSTOM_RUN', { tabId, data: aiDraft })).data, '运行时回答');
+  const aiAuto = await rpc('CUSTOM_SAVE', {
+    data: {
+      ...aiDraft,
+      autoStart: { enabled: true, scope: 'all', matches: [], rerunOnRoute: false },
+      script:
+        'const b=document.createElement("button");b.id="runtime-ai-button";b.textContent="ask";b.onclick=async()=>{try{b.textContent=await ctx.ai.ask({instruction:"总结",input:document.title,signal:ctx.signal});}catch(e){b.textContent=e.message;}};document.body.append(b);ctx.onCleanup(()=>b.remove());',
+    },
+  });
+  await page.locator('#runtime-ai-button').click();
+  await page.locator('#runtime-ai-button').filter({ hasText: '运行时回答' }).waitFor();
+  await rpc('CUSTOM_DELETE', { id: aiAuto.id });
+  await worker.evaluate(() => {
+    globalThis.runtimeAborted = false;
+    globalThis.fetch = async (_url, options) =>
+      new Promise((resolve, reject) => {
+        globalThis.runtimeStarted = true;
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            globalThis.runtimeAborted = true;
+            reject(new Error('aborted'));
+          },
+          { once: true },
+        );
+      });
+  });
+  await worker.evaluate(() => {
+    globalThis.runtimeStarted = false;
+  });
+  await worker.evaluate(() => {
+    globalThis.runtimeAborted = false;
+    globalThis.runtimeStarted = false;
+  });
+  const cancelledAI = await rpc('CUSTOM_RUN', {
+    tabId,
+    data: {
+      ...aiDraft,
+      script:
+        'const c=new AbortController();setTimeout(()=>c.abort(),100);try{return await ctx.ai.ask({instruction:"wait",signal:c.signal});}catch(e){return e.message;}',
+    },
+  });
+  assert.match(cancelledAI.data, /取消/);
+  await panel.waitForTimeout(200);
+  assert.equal(await worker.evaluate(() => globalThis.runtimeAborted), true);
+  await worker.evaluate(() => {
+    globalThis.runtimeAborted = false;
+    globalThis.runtimeStarted = false;
+  });
+  const pendingAuto = await rpc('CUSTOM_SAVE', {
+    data: {
+      ...aiDraft,
+      autoStart: { enabled: true, scope: 'all', matches: [], rerunOnRoute: false },
+      script:
+        'const b=document.createElement("button");b.id="pending-runtime-ai";b.textContent="ask";b.onclick=async()=>{try{await ctx.ai.ask({instruction:"wait",signal:ctx.signal});}catch{}};document.body.append(b);ctx.onCleanup(()=>b.remove());',
+    },
+  });
+  await page.locator('#pending-runtime-ai').click();
+  for (let i = 0; i < 50 && !(await worker.evaluate(() => globalThis.runtimeStarted)); i++)
+    await panel.waitForTimeout(100);
+  assert.equal(await worker.evaluate(() => globalThis.runtimeStarted), true);
+  await rpc('CUSTOM_DELETE', { id: pendingAuto.id });
+  for (let i = 0; i < 50 && !(await worker.evaluate(() => globalThis.runtimeAborted)); i++)
+    await panel.waitForTimeout(100);
+  assert.equal(await worker.evaluate(() => globalThis.runtimeAborted), true);
+  await rpc('SURFACE_MODE', { mode: 'sidepanel' });
   await context.close();
   context = await chromium.launchPersistentContext(profile, {
+    // Fresh worker below verifies persisted tools independently of the AI mocks.
     channel: 'chromium',
     headless: true,
     args: [`--disable-extensions-except=${testExtension}`, `--load-extension=${testExtension}`],
@@ -655,9 +1096,19 @@ try {
   await reopened.locator('#pc-auto-test').click();
   const residentDownload = await residentDownloadPending;
   assert.equal(residentDownload.suggestedFilename(), 'resident.txt');
-  assert.match(await readFile(await residentDownload.path(), 'utf8'), /这是 PageCraft 的本地验收页面/);
+  assert.match(
+    await readFile(await residentDownload.path(), 'utf8'),
+    /这是 PageCraft 的本地验收页面/,
+  );
   const reopenedPanel = await context.newPage();
   await reopenedPanel.goto(`chrome-extension://${id}/options.html`);
+  await reopenedPanel.evaluate(() => chrome.runtime.sendMessage({ type: 'STATE' }));
+  assert.equal(await reopenedPanel.evaluate(() => chrome.action.getPopup({})), '');
+  assert.equal(
+    (await reopenedPanel.evaluate(() => chrome.sidePanel.getPanelBehavior()))
+      .openPanelOnActionClick,
+    true,
+  );
   const persistedTools = await reopenedPanel.evaluate(
     async () => (await chrome.runtime.sendMessage({ type: 'CUSTOM_LIST' })).data,
   );
